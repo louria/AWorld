@@ -51,13 +51,12 @@ class GaiaAgentRunner:
             mcp_servers=mcp_config.get("mcpServers", {}).keys(),
         )
 
-        self.gaia_dataset_path = os.path.abspath(
-            os.getenv(
-                "GAIA_DATASET_PATH",
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "GAIA", "2023"),
+        self.gaia_dataset_path = "/app/aworld/examples/gaia/GAIA"
+        self.full_dataset = {}
+        for split in ["validation", "test"]:
+            self.full_dataset.update(
+                load_dataset_meta_dict(self.gaia_dataset_path, split=split)
             )
-        )
-        self.full_dataset = load_dataset_meta_dict(self.gaia_dataset_path)
         logger.info(
             f"Gaia Agent Runner initialized: super_agent={self.super_agent}, agent_config={self.agent_config}, gaia_dataset_path={self.gaia_dataset_path}, full_dataset={len(self.full_dataset)}"
         )
@@ -75,11 +74,12 @@ class GaiaAgentRunner:
             json_data = json.loads(prompt)
             task_id = json_data["task_id"]
 
-            data_item = self.full_dataset[task_id]
-            question = add_file_path(data_item, file_path=self.gaia_dataset_path)[
-                "Question"
-            ]
-            yield (f"\n```gaia_question\n{json.dumps(data_item, indent=2)}\n```\n")
+            data_item = self.full_dataset.get(task_id)
+            if data_item:
+                question = add_file_path(data_item, file_path=self.gaia_dataset_path)[
+                    "Question"
+                ]
+                yield (f"\n```gaia_question\n{json.dumps(data_item, indent=2)}\n```\n")
         except Exception as e:
             pass
 

@@ -1,11 +1,11 @@
 services:
   openwebui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.6.15
     ports:
       - 127.0.0.1:8080:8080
     restart: on-failure:3
     volumes:
-      - ./examples/gaia/openwebui-patch/ca81bd47c050_add_config_table.py:/app/backend/open_webui/migrations/versions/ca81bd47c050_add_config_table.py
+      # - ./examples/gaia/openwebui-patch/ca81bd47c050_add_config_table.py:/app/backend/open_webui/migrations/versions/ca81bd47c050_add_config_table.py
       - ./examples/gaia/GAIA:/app/aworld/examples/gaia/GAIA
     environment:
       - HF_HUB_OFFLINE=1
@@ -31,6 +31,9 @@ services:
       - 127.0.0.1:8888:8888
     volumes:
       - ./.env:/app/aworld/.env
+      - ./examples/gaia/GAIA:/app/aworld/examples/gaia/GAIA
+    environment:
+      - GAIA_DATASET_PATH=/app/aworld/examples/gaia/GAIA
     env_file:
       - ./.env
     restart: on-failure:3

@@ -14,9 +14,13 @@ RUN rm -fv /etc/apt/sources.list.d/* && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y wget unzip openssh-client procps nodejs npm 
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get install -y wget unzip openssh-client procps
 
 # Config Env
+RUN npm config set registry https://registry.npmmirror.com
 RUN npx playwright install chrome
 RUN npm install @playwright/mcp @negokaz/excel-mcp-server
 
@@ -26,6 +30,7 @@ FROM base AS gaia_env
 # Install aworld
 COPY ./aworld aworld
 COPY ./setup.py setup.py
+RUN pip install python-dotenv
 RUN python setup.py install
 
 # Install mcp servers requirements

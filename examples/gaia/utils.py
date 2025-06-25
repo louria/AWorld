@@ -95,43 +95,48 @@ def load_dataset_meta(path: str, split: str = "validation"):
 
 
 def load_dataset_meta_dict(path: str, split: str = "validation"):
-    data_dir = Path(path) / split
+    data_dir = Path(path) / "2023" / split
 
     dataset = {}
-    with open(data_dir / "metadata.jsonl", "r", encoding="utf-8") as metaf:
+    metadata_file = data_dir / "metadata.jsonl"
+    if not metadata_file.exists():
+        logger.warning(f"Metadata file not found at {metadata_file}, skipping.")
+        return {}
+
+    with open(metadata_file, "r", encoding="utf-8") as metaf:
         lines = metaf.readlines()
         for line in lines:
             data = json.loads(line)
             if data["task_id"] == "0-0-0-0-0":
                 continue
             if data["file_name"]:
-                data["file_name"] = data_dir / data["file_name"]
+                data["file_name"] = Path("2023") / split / data["file_name"]
             dataset[data["task_id"]] = data
     return dataset
 
 
 def add_file_path(
-    task: Dict[str, Any], file_path: str = "./gaia_dataset", split: str = "validation"
+    task: Dict[str, Any], file_path: str = "./gaia_dataset"
 ):
     if task["file_name"]:
-        file_path = Path(f"{file_path}/{split}") / task["file_name"]
-        if file_path.suffix in [".pdf", ".docx", ".doc", ".txt"]:
-            task["Question"] += f" Here are the necessary document files: {file_path}"
+        full_file_path = Path(file_path) / task["file_name"]
+        if full_file_path.suffix in [".pdf", ".docx", ".doc", ".txt"]:
+            task["Question"] += f" Here are the necessary document files: {full_file_path}"
 
-        elif file_path.suffix in [".jpg", ".jpeg", ".png"]:
-            task["Question"] += f" Here are the necessary image files: {file_path}"
+        elif full_file_path.suffix in [".jpg", ".jpeg", ".png"]:
+            task["Question"] += f" Here are the necessary image files: {full_file_path}"
 
-        elif file_path.suffix in [".xlsx", "xls", ".csv"]:
+        elif full_file_path.suffix in [".xlsx", "xls", ".csv"]:
             task["Question"] += (
-                f" Here are the necessary table files: {file_path}, for processing excel file,"
+                f" Here are the necessary table files: {full_file_path}, for processing excel file,"
                 " you can use the excel tool or write python code to process the file"
                 " step-by-step and get the information."
             )
-        elif file_path.suffix in [".py"]:
-            task["Question"] += f" Here are the necessary python files: {file_path}"
+        elif full_file_path.suffix in [".py"]:
+            task["Question"] += f" Here are the necessary python files: {full_file_path}"
 
         else:
-            task["Question"] += f" Here are the necessary files: {file_path}"
+            task["Question"] += f" Here are the necessary files: {full_file_path}"
 
     return task
 

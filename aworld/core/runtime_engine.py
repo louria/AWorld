@@ -92,7 +92,7 @@ class LocalRuntime(RuntimeEngine):
                 res = await func(*args, **kwargs)
             else:
                 res = func(*args, **kwargs)
-            return {res.id: res}
+            return {res.id: res} if hasattr(res, "id") else {}
 
         num_executor = self.conf.get('worker_num', os.cpu_count() - 1)
         num_process = len(funcs)
