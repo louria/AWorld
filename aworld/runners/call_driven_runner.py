@@ -10,10 +10,10 @@ from typing import List, Dict, Any, Tuple
 
 from aworld.config.conf import ToolConfig
 from aworld.core.agent.base import is_agent
-from aworld.core.agent.llm_agent import Agent
+from aworld.agents.llm_agent import Agent
 from aworld.core.common import Observation, ActionModel, ActionResult
 from aworld.core.context.base import Context
-from aworld.core.event.base import Message
+from aworld.core.event.base import Message, ToolMessage, AgentMessage
 from aworld.core.tool.base import ToolFactory, Tool, AsyncTool
 from aworld.core.tool.tool_desc import is_tool_by_name
 from aworld.core.task import Task, TaskResponse
@@ -39,7 +39,7 @@ def action_result_transform(message: Message, sandbox: Sandbox) -> Tuple[Observa
                              action_result=action_results), 1.0, result.is_done, result.is_done, {}
 
 
-class SequenceRunner(TaskRunner):
+class WorkflowRunner(TaskRunner):
     def __init__(self, task: Task, *args, **kwargs):
         super().__init__(task=task, *args, **kwargs)
 
@@ -76,7 +76,9 @@ class SequenceRunner(TaskRunner):
             except Exception as err:
                 logger.error(f"Runner run failed, err is {traceback.format_exc()}")
             finally:
-                await self.outputs.mark_completed()
+                if not self.task.is_sub_task:
+                    logger.info(f"FINISHED|call_driven_runner|mark_completed|{self.task.id}")
+                    await self.outputs.mark_completed()
                 color_log(f"task token usage: {self.context.token_usage}",
                           color=Color.pink,
                           logger_=trace_logger)
@@ -113,7 +115,7 @@ class SequenceRunner(TaskRunner):
             cur_agent = agent
             while step <= self.max_steps:
                 await self.outputs.add_output(
-                    StepOutput.build_start_output(name=f"Step{step}", step_num=step))
+                    StepOutput.build_start_output(name=f"Step{step}", step_num=step, task_id=self.task.id))
 
                 terminated = False
 
@@ -141,15 +143,20 @@ class SequenceRunner(TaskRunner):
                     except:
                         pass
                     pre_agent_name = cur_agent.id()
+                    agent_message = AgentMessage(
+                        payload=observation,
+                        session_id=self.context.session_id,
+                        headers={"context": self.context}
+                    )
 
                     if not override_in_subclass('async_policy', cur_agent.__class__, Agent):
-                        message = cur_agent.run(observation,
+                        message = cur_agent.run(agent_message,
                                                 step=step,
                                                 outputs=self.outputs,
                                                 stream=self.conf.get("stream", False),
                                                 exp_id=exp_id)
                     else:
-                        message = await cur_agent.async_run(observation,
+                        message = await cur_agent.async_run(agent_message,
                                                             step=step,
                                                             outputs=self.outputs,
                                                             stream=self.conf.get("stream",
@@ -166,9 +173,11 @@ class SequenceRunner(TaskRunner):
                         await self.outputs.add_output(
                             StepOutput.build_failed_output(name=f"Step{step}",
                                                            step_num=step,
-                                                           data=f"current agent {cur_agent.id()} no policy to use.")
+                                                           data=f"current agent {cur_agent.id()} no policy to use.",
+                                                           task_id=self.context.task_id)
                         )
-                        await self.outputs.mark_completed()
+                        if not self.task.is_sub_task:
+                            await self.outputs.mark_completed()
                         task_span.set_attributes({
                             "end_time": time.time(),
                             "duration": time.time() - start,
@@ -200,7 +209,9 @@ class SequenceRunner(TaskRunner):
                             break
                         elif status == 'return':
                             await self.outputs.add_output(
-                                StepOutput.build_finished_output(name=f"Step{step}", step_num=step)
+                                StepOutput.build_finished_output(name=f"Step{step}",
+                                                                 step_num=step,
+                                                                 task_id=self.context.task_id)
                             )
                             info.time_cost = (time.time() - start)
                             task_span.set_attributes({
@@ -218,11 +229,16 @@ class SequenceRunner(TaskRunner):
                     else:
                         logger.warning(f"Unrecognized policy: {policy[0]}")
                         await self.outputs.add_output(
-                            StepOutput.build_failed_output(name=f"Step{step}",
-                                                           step_num=step,
-                                                           data=f"Unrecognized policy: {policy[0]}, need to check prompt or agent / tool.")
+                            StepOutput.build_failed_output(
+                                name=f"Step{step}",
+                                step_num=step,
+                                data=f"Unrecognized policy: {policy[0]}, need to check prompt or agent / tool.",
+                                task_id=self.context.task_id
+                            )
                         )
-                        await self.outputs.mark_completed()
+                        if not self.task.is_sub_task:
+                            logger.info(f"FINISHED|WorkflowRunner|outputs|{self.task.id} {self.task.is_sub_task}")
+                            await self.outputs.mark_completed()
                         task_span.set_attributes({
                             "end_time": time.time(),
                             "duration": time.time() - start,
@@ -239,7 +255,8 @@ class SequenceRunner(TaskRunner):
                         )
                     await self.outputs.add_output(
                         StepOutput.build_finished_output(name=f"Step{step}",
-                                                         step_num=step, )
+                                                         step_num=step,
+                                                         task_id=self.context.task_id)
                     )
                     step += 1
                     if terminated and agent.finished:
@@ -318,12 +335,17 @@ class SequenceRunner(TaskRunner):
             tool_mapping[act.tool_name].append(act)
 
         for tool_name, action in tool_mapping.items():
+            tool_message = ToolMessage(
+                payload=action,
+                session_id=self.context.session_id,
+                headers={"context": self.context}
+            )
             # Execute action using browser tool and unpack all return values
             if isinstance(self.tools[tool_name], Tool):
-                message = self.tools[tool_name].step(action)
+                message = self.tools[tool_name].step(tool_message)
             elif isinstance(self.tools[tool_name], AsyncTool):
                 # todo sandbox
-                message = await self.tools[tool_name].step(action, agent=agent)
+                message = await self.tools[tool_name].step(tool_message, agent=agent)
             else:
                 logger.warning(f"Unsupported tool type: {self.tools[tool_name]}")
                 continue
@@ -366,7 +388,7 @@ class SequenceRunner(TaskRunner):
         return f"{self.task.id}_{step}_{cur_agent_name}_{exp_index}"
 
 
-class LoopSequenceRunner(SequenceRunner):
+class LoopWorkflowRunner(WorkflowRunner):
 
     async def _do_run(self, context: Context = None) -> TaskResponse:
         observation = self.observation
@@ -390,7 +412,9 @@ class LoopSequenceRunner(SequenceRunner):
             except Exception as err:
                 logger.error(f"Runner run failed, err is {traceback.format_exc()}")
             finally:
-                await self.outputs.mark_completed()
+                if not self.task.is_sub_task:
+                    logger.info(f"FINISHED|LoopWorkflowRunner|outputs|{self.task.id} {self.task.is_sub_task}")
+                    await self.outputs.mark_completed()
                 color_log(f"task token usage: {self.context.token_usage}",
                           color=Color.pink,
                           logger_=trace_logger)
@@ -412,7 +436,7 @@ class LoopSequenceRunner(SequenceRunner):
                                 usage=self.context.token_usage)
 
 
-class SocialRunner(TaskRunner):
+class HandoffRunner(TaskRunner):
     def __init__(self, task: Task, *args, **kwargs):
         super().__init__(task=task, *args, **kwargs)
 
@@ -422,7 +446,7 @@ class SocialRunner(TaskRunner):
         return resp
 
     async def _do_run(self, context: Context = None) -> TaskResponse:
-        """Multi-agent general process workflow.
+        """Multi-agent general process based on handoff.
 
         NOTE: Use the agent's finished state to control the loop, so the agent must carefully set finished state.
 
@@ -526,13 +550,18 @@ class SocialRunner(TaskRunner):
         self.swarm.cur_agent = self.swarm.communicate_agent
         pre_agent_name = None
         # use communicate agent every time
+        agent_message = AgentMessage(
+            payload=observation,
+            session_id=self.context.session_id,
+            headers={"context": self.context}
+        )
         if override_in_subclass('async_policy', self.swarm.cur_agent.__class__, Agent):
-            message = self.swarm.cur_agent.run(observation,
+            message = self.swarm.cur_agent.run(agent_message,
                                                step=step,
                                                outputs=self.outputs,
                                                stream=self.conf.get("stream", False))
         else:
-            message = await self.swarm.cur_agent.async_run(observation,
+            message = await self.swarm.cur_agent.async_run(agent_message,
                                                            step=step,
                                                            outputs=self.outputs,
                                                            stream=self.conf.get("stream", False))
@@ -625,18 +654,23 @@ class SocialRunner(TaskRunner):
                 if observation:
                     if cur_agent is None:
                         cur_agent = self.swarm.cur_agent
+                    agent_message = AgentMessage(
+                        payload=observation,
+                        session_id=self.context.session_id,
+                        headers={"context": self.context}
+                    )
                     if not override_in_subclass('async_policy', cur_agent.__class__, Agent):
-                        message = cur_agent.run(observation,
+                        message = cur_agent.run(agent_message,
                                                 step=step,
                                                 outputs=self.outputs,
                                                 stream=self.conf.get("stream", False))
                     else:
-                        message = await cur_agent.async_run(observation,
+                        message = await cur_agent.async_run(agent_message,
                                                             step=step,
                                                             outputs=self.outputs,
                                                             stream=self.conf.get("stream", False))
                     policy = message.payload
-                    color_log(f"{cur_agent.name()} policy: {policy}")
+                    color_log(f"{cur_agent.id()} policy: {policy}")
 
             if policy:
                 response = policy[0].policy_info if policy[0].policy_info else policy[0].action_name
@@ -701,13 +735,19 @@ class SocialRunner(TaskRunner):
                              "agent_names": cur_agent.handoffs,
                              "mcp_servers": cur_agent.mcp_servers})
 
+        agent_message = AgentMessage(
+            payload=observation,
+            session_id=self.context.session_id,
+            headers={"context": self.context}
+        )
+
         if not override_in_subclass('async_policy', cur_agent.__class__, Agent):
-            message = cur_agent.run(observation,
+            message = cur_agent.run(agent_message,
                                     step=step,
                                     outputs=self.outputs,
                                     stream=self.conf.get("stream", False))
         else:
-            message = await cur_agent.async_run(observation,
+            message = await cur_agent.async_run(agent_message,
                                                 step=step,
                                                 outputs=self.outputs,
                                                 stream=self.conf.get("stream", False))
@@ -746,23 +786,32 @@ class SocialRunner(TaskRunner):
             tool_mapping[act.tool_name].append(act)
 
         for tool_name, action in tool_mapping.items():
+            tool_message = ToolMessage(
+                payload=action,
+                session_id=self.context.session_id,
+                headers={"context": self.context}
+            )
             # Execute action using browser tool and unpack all return values
             if isinstance(self.tools[tool_name], Tool):
-                message = self.tools[tool_name].step(action)
+                message = self.tools[tool_name].step(tool_message)
             elif isinstance(self.tools[tool_name], AsyncTool):
-                message = await self.tools[tool_name].step(action)
+                message = await self.tools[tool_name].step(tool_message)
             else:
                 logger.warning(f"Unsupported tool type: {self.tools[tool_name]}")
                 continue
 
             observation, reward, terminated, _, info = message.payload
             for i, item in enumerate(action):
-                tool_output = ToolResultOutput(data=observation.content, origin_tool_call=ToolCall.from_dict({
-                    "function": {
-                        "name": item.action_name,
-                        "arguments": item.params,
-                    }
-                }))
+                tool_output = ToolResultOutput(
+                    data=observation.content,
+                    origin_tool_call=ToolCall.from_dict({
+                        "function": {
+                            "name": item.action_name,
+                            "arguments": item.params,
+                        }
+                    }),
+                    task_id=self.task.id
+                )
                 await self.outputs.add_output(tool_output)
 
             # Check if there's an exception in info

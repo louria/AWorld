@@ -2,8 +2,14 @@
 # Copyright (c) 2025 inclusionAI.
 import os
 
-from dotenv import load_dotenv
+try:
+    from aworld.utils.import_package import import_package
 
-sucess = load_dotenv()
-if not sucess:
-    load_dotenv(os.path.join(os.getcwd(), '.env'))
+    import_package("dotenv", install_name="python-dotenv")
+    from dotenv import load_dotenv
+
+    sucess = load_dotenv()
+    if not sucess:
+        load_dotenv(os.path.join(os.getcwd(), ".env"))
+except Exception as e:
+    print(e)

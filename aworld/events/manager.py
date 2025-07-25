@@ -10,10 +10,10 @@ from aworld.core.event.base import Constants, Message
 class EventManager:
     """The event manager is now used to build an event bus instance and store the messages recently."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, context: Context, **kwargs):
         # use conf to build event bus instance
         self.event_bus = eventbus
-        self.context = Context.instance()
+        self.context = context
         # Record events in memory for re-consume.
         self.messages: Dict[str, List[Message]] = {'None': []}
         self.max_len = kwargs.get('max_len', 1000)
@@ -44,6 +44,7 @@ class EventManager:
             receiver=receiver,
             topic=topic,
             category=event_type,
+            headers={"context": self.context}
         )
         return await self.emit_message(event)
 
@@ -61,24 +62,31 @@ class EventManager:
 
     async def consume(self, nowait: bool = False):
         msg = Message(session_id=self.context.session_id, sender="", category="", payload="")
+        msg.context = self.context
         if nowait:
             return await self.event_bus.consume_nowait(msg)
         return await self.event_bus.consume(msg)
 
     async def done(self):
-        await self.event_bus.done(self.context.session_id)
+        await self.event_bus.done(self.context.task_id)
 
     async def register(self, event_type: str, topic: str, handler: Callable[..., Any], **kwargs):
-        await self.event_bus.subscribe(event_type, topic, handler, **kwargs)
+        await self.event_bus.subscribe(self.context.task_id, event_type, topic, handler, **kwargs)
 
     async def unregister(self, event_type: str, topic: str, handler: Callable[..., Any], **kwargs):
-        await self.event_bus.unsubscribe(event_type, topic, handler, **kwargs)
+        await self.event_bus.unsubscribe(self.context.task_id, event_type, topic, handler, **kwargs)
 
     async def register_transformer(self, event_type: str, topic: str, handler: Callable[..., Any], **kwargs):
-        await self.event_bus.subscribe(event_type, topic, handler, transformer=True, **kwargs)
+        await self.event_bus.subscribe(self.context.task_id, event_type, topic, handler, transformer=True, **kwargs)
 
     async def unregister_transformer(self, event_type: str, topic: str, handler: Callable[..., Any], **kwargs):
-        await self.event_bus.unsubscribe(event_type, topic, handler, transformer=True, **kwargs)
+        await self.event_bus.unsubscribe(self.context.task_id, event_type, topic, handler, transformer=True, **kwargs)
+
+    def get_handlers(self, event_type: str) -> Dict[str, List[Callable[..., Any]]]:
+        return self.event_bus.get_handlers(self.context.task_id, event_type)
+
+    def get_transform_handler(self, key: str) -> Callable[..., Any]:
+        return self.event_bus.get_transform_handler(self.context.task_id, key)
 
     def messages_by_key(self, key: str) -> List[Message]:
         return self.messages.get(key, [])
@@ -99,6 +107,15 @@ class EventManager:
 
     def session_messages(self, session_id: str) -> List[Message]:
         return [m for k, msg in self.messages.items() for m in msg if m.session_id == session_id]
+
+    def messages_by_task_id(self, task_id: str):
+        results = []
+        for _, msgs in self.messages.items():
+            for msg in msgs:
+                if msg.context.task_id == task_id:
+                    results.append(msg)
+        results.sort(key=lambda x: x.timestamp)
+        return results
 
     @staticmethod
     def mark_valid(messages: List[Message]):

@@ -120,6 +120,7 @@ examples/gaia/gaia_dataset/
 *.ppt
 *.pdf
 *.wav
+*.bak
 
 # Node Modules
 node_modules/
@@ -131,3 +132,7 @@ traces*.json
 trace_data
 
 examples/gaia/output
+examples/**/workspaces
+examples/**/data
+examples/**/*.bak
+=**

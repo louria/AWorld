@@ -1,5 +1,5 @@
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Sequence, Optional
 from aworld.trace.span_cosumer import SpanConsumer
 from logging import Logger
@@ -7,19 +7,26 @@ from aworld.logs.util import trace_logger
 from aworld.trace.context_manager import trace_configure
 from aworld.metrics.context_manager import MetricContext
 from aworld.logs.log import set_log_provider, instrument_logging
+from aworld.trace.instrumentation.uni_llmmodel import LLMModelInstrumentor
+from aworld.trace.instrumentation.eventbus import EventBusInstrumentor
+from aworld.trace.instrumentation.agent import AgentInstrumentor
+from aworld.trace.instrumentation.tool import ToolInstrumentor
+
+from aworld.trace.opentelemetry.memory_storage import TraceStorage
 
 
 class ObservabilityConfig(BaseModel):
     '''
     Observability configuration
     '''
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     trace_provider: Optional[str] = "otlp"
     trace_backends: Optional[Sequence[str]] = ["memory"]
     trace_base_url: Optional[str] = None
     trace_write_token: Optional[str] = None
     trace_span_consumers: Optional[Sequence[SpanConsumer]] = None
+    trace_storage: Optional[TraceStorage] = None
     # whether to start the trace service
     trace_server_enabled: Optional[bool] = False
     trace_server_port: Optional[int] = 7079
@@ -43,6 +50,10 @@ def configure(config: ObservabilityConfig = None):
     _trace_configure(config)
     _metrics_configure(config)
     _log_configure(config)
+    LLMModelInstrumentor().instrument()
+    EventBusInstrumentor().instrument()
+    AgentInstrumentor().instrument()
+    ToolInstrumentor().instrument()
 
 
 def _trace_configure(config: ObservabilityConfig):
@@ -60,7 +71,8 @@ def _trace_configure(config: ObservabilityConfig):
         write_token=config.trace_write_token,
         span_consumers=config.trace_span_consumers,
         server_enabled=config.trace_server_enabled,
-        server_port=config.trace_server_port
+        server_port=config.trace_server_port,
+        storage=config.trace_storage
     )
 
 

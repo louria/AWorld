@@ -47,7 +47,7 @@ from aworld.utils.common import get_local_ip
 from .memory_storage import InMemorySpanExporter, InMemoryStorage
 from ..constants import ATTRIBUTES_MESSAGE_KEY
 from .export import FileSpanExporter, NoOpSpanExporter, SpanConsumerExporter
-from ..server import start_trace_server
+from ..server import set_trace_server
 
 
 class OTLPTraceProvider(TraceProvider):
@@ -359,17 +359,20 @@ def configure_otlp_provider(
         elif backend == "memory":
             logger.info("Using in-memory storage for traces.")
             storage = kwargs.get(
-                "storage", InMemoryStorage())
+                "storage", InMemoryStorage()) or InMemoryStorage()
             processor.add_span_processor(
                 SimpleSpanProcessor(InMemorySpanExporter(storage=storage)))
-            server_enabled = kwargs.get("server_enabled") or os.getenv(
+            server_enabled = str(kwargs.get("server_enabled")) or os.getenv(
                 "START_TRACE_SERVER") or "true"
             server_port = kwargs.get("server_port") or 7079
             if (server_enabled.lower() == "true"):
                 logger.info(f"Starting trace server on port {server_port}.")
-                start_trace_server(storage=storage, port=int(server_port))
+                set_trace_server(storage=storage, port=int(
+                    server_port), start_server=True)
             else:
                 logger.info("Trace server is not started.")
+                set_trace_server(storage=storage, port=int(
+                    server_port), start_server=False)
         else:
             span_exporter = _configure_otlp_exporter(
                 base_url=base_url, **kwargs)
@@ -400,7 +403,7 @@ def _configure_logfire_exporter(write_token: str, base_url: str = None) -> None:
     )
 
 
-def _configure_otlp_exporter(base_url: str = None,  **kwargs) -> None:
+def _configure_otlp_exporter(base_url: str = None, **kwargs) -> None:
     """Configure the OTLP exporter.
     Args:
         write_token: The write token to use.

@@ -86,6 +86,7 @@ class AWorldPackage(sdist):
             f.write(version_info)
 
         generate_version_info(scenario="AWORLD_SDIST")
+
         sdist.run(self)
 
 
@@ -130,7 +131,7 @@ class AWorldInstaller(install):
             # install requirements one by one
             for req in reqs:
                 try:
-                    cmd = f"{sys.executable} -m pip install {info} {req}"
+                    cmd = f"{sys.executable} -m pip install {info} '{req}'"
                     call_process(cmd)
                     logger.info(f"Installing optional package {req} have succeeded.")
                 except:
@@ -138,7 +139,8 @@ class AWorldInstaller(install):
                         f"Installing optional package {req} is failed, Ignored."
                     )  # ignore
         elif reqs:
-            cmd = f"{sys.executable} -m pip install {info} {' '.join(reqs)}"
+            cmd_reqs = "'" + "' '".join(reqs) + "'"
+            cmd = f"{sys.executable} -m pip install {info} {cmd_reqs}"
             call_process(cmd)
             logger.info(f"Packages {str(reqs)} have been installed.")
 
@@ -215,7 +217,16 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(
         where=".",
-        exclude=["tests", "tests.*", "*.tests", "*.tests.*", "*.test", "*.test.*"],
+        exclude=[
+            "tests",
+            "tests.*",
+            "*.tests",
+            "*.tests.*",
+            "test",
+            "*.test",
+            "*.test.*",
+            "test.*",
+        ],
     ),
     package_data={
         "aworld": [
@@ -225,8 +236,13 @@ setup(
             "config/*.yaml",
             "config/*.json",
             "config/*.tiktoken",
-            "web/templates/*.html",
-        ]
+            "cmd/web/webui/public/trace_ui.html",
+            "cmd/web/webui/dist/**",
+        ],
+        "examples": [
+            "**/mcp.json",
+            "gaia/GAIA/**",
+        ],
     },
     license="MIT",
     platforms=["any"],

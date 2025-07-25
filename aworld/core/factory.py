@@ -61,7 +61,7 @@ class Factory(Generic[T]):
         name = "async_" + name if asyn else name
         return self._ext_info.get(name, {})
 
-    def register(self, name: str, desc: str, **kwargs):
+    def register(self, name: str, desc: str = '', **kwargs):
         def func(cls):
             asyn = kwargs.pop("asyn", False)
             prefix = "async_" if asyn else ""
@@ -74,6 +74,9 @@ class Factory(Generic[T]):
                     equal = self._asyn[name] == asyn
                 if equal:
                     logger.warning(f"{name} already in {self._type} factory, will override it.")
+
+            # Add REGISTERED_NAME attribute to the class to save the registered name
+            setattr(cls, "REGISTERED_NAME", name)
 
             self._asyn[name] = asyn
             self._cls[prefix + name] = cls

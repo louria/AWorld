@@ -1,18 +1,19 @@
 # coding: utf-8
 # Copyright (c) 2025 inclusionAI.
 import asyncio
+import logging
+from concurrent.futures.process import ProcessPoolExecutor
 from typing import List, Dict, Union
 
-import aworld.tools
+from aworld.config import RunConfig
 from aworld.config.conf import TaskConfig
-from aworld.core.agent.llm_agent import Agent
+from aworld.agents.llm_agent import Agent
 from aworld.core.agent.swarm import Swarm
 from aworld.core.common import Config
 from aworld.core.task import Task, TaskResponse, Runner
 from aworld.output import StreamingOutputs
-from aworld import trace
-from aworld.runners.utils import choose_runners, execute_runner
 from aworld.utils.common import sync_exec
+from aworld.utils.run_util import exec_tasks
 
 
 class Runners:
@@ -30,6 +31,9 @@ class Runners:
             is_complete=False
         )
         task.outputs = streamed_result
+        streamed_result.task_id = task.id
+
+        logging.info(f"[Runners]streamed_run_task start task_id={task.id}, agent={task.agent}, swarm = {task.swarm} ")
 
         streamed_result._run_impl_task = asyncio.create_task(
             Runners.run_task(task)
@@ -37,7 +41,7 @@ class Runners:
         return streamed_result
 
     @staticmethod
-    async def run_task(task: Union[Task, List[Task]], run_conf: Config = None) -> Dict[str, TaskResponse]:
+    async def run_task(task: Union[Task, List[Task]], run_conf: RunConfig = None) -> Dict[str, TaskResponse]:
         """Run tasks for some complex scenarios where agents cannot be directly used.
 
         Args:
@@ -47,8 +51,10 @@ class Runners:
         if isinstance(task, Task):
             task = [task]
 
-            runners: List[Runner] = await choose_runners(task)
-            return await execute_runner(runners, run_conf)
+        logging.debug(f"[Runners]run_task start task_id={task[0].id} start")
+        result = await exec_tasks(task, run_conf)
+        logging.debug(f"[Runners]run_task end task_id={task[0].id} end")
+        return result
 
     @staticmethod
     def sync_run_task(task: Union[Task, List[Task]], run_conf: Config = None) -> Dict[str, TaskResponse]:
@@ -59,14 +65,16 @@ class Runners:
             input: str,
             agent: Agent = None,
             swarm: Swarm = None,
-            tool_names: List[str] = []
+            tool_names: List[str] = [],
+            session_id: str = None
     ) -> TaskResponse:
         return sync_exec(
             Runners.run,
             input=input,
             agent=agent,
             swarm=swarm,
-            tool_names=tool_names
+            tool_names=tool_names,
+            session_id=session_id
         )
 
     @staticmethod
@@ -74,7 +82,8 @@ class Runners:
             input: str,
             agent: Agent = None,
             swarm: Swarm = None,
-            tool_names: List[str] = []
+            tool_names: List[str] = [],
+            session_id: str = None
     ) -> TaskResponse:
         """Run agent directly with input and tool names.
 
@@ -83,6 +92,10 @@ class Runners:
             agent: An agent with AI model configured, prompts, tools, mcp servers and other agents.
             swarm: Multi-agent topo.
             tool_names: Tool name list.
+            session_id: Session id.
+
+        Returns:
+            TaskResponse: Task response.
         """
         if agent and swarm:
             raise ValueError("`agent` and `swarm` only choose one.")
@@ -94,6 +107,7 @@ class Runners:
             agent.task = input
             swarm = Swarm(agent)
 
-        task = Task(input=input, swarm=swarm, tool_names=tool_names, event_driven=swarm.event_driven)
+        task = Task(input=input, swarm=swarm, tool_names=tool_names,
+                    event_driven=swarm.event_driven, session_id=session_id)
         res = await Runners.run_task(task)
         return res.get(task.id)

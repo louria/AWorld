@@ -1,8 +1,11 @@
 import logging
 import json
+import traceback
+
 from typing_extensions import Optional, List, Dict, Any
 
-from aworld.mcp_client.utils import sandbox_mcp_tool_desc_transform, call_api, get_server_instance, cleanup_server
+from aworld.mcp_client.utils import sandbox_mcp_tool_desc_transform, call_api, get_server_instance, cleanup_server, \
+    call_function_tool
 from mcp.types import TextContent, ImageContent
 
 from aworld.core.common import ActionResult
@@ -34,6 +37,7 @@ class McpServers:
             self.tool_list = await sandbox_mcp_tool_desc_transform(self.mcp_servers, self.mcp_config)
             return self.tool_list
         except Exception as e:
+            traceback.print_exc()
             logging.warning(f"Failed to list tools: {e}")
             return []
 
@@ -69,10 +73,10 @@ class McpServers:
                 
                 if parameter is None:
                     parameter = {}
-                if task_id:
-                    parameter["task_id"] = task_id
-                if session_id:
-                    parameter["session_id"] = session_id
+                # if task_id:
+                #     parameter["task_id"] = task_id
+                # if session_id:
+                #     parameter["session_id"] = session_id
 
                 if not server_name or not tool_name:
                     continue
@@ -82,6 +86,19 @@ class McpServers:
                 if self.mcp_config and self.mcp_config.get("mcpServers"):
                     server_config = self.mcp_config.get("mcpServers").get(server_name, {})
                     server_type = server_config.get("type", "")
+
+                if server_type == "function_tool":
+                    try:
+                        call_result = await call_function_tool(
+                            server_name, tool_name, parameter, self.mcp_config
+                        )
+                        results.append(call_result)
+
+                        self._update_metadata(result_key, call_result, operation_info)
+                    except Exception as e:
+                        logging.warning(f"Error calling function_tool tool: {e}")
+                        self._update_metadata(result_key, {"error": str(e)}, operation_info)
+                    continue
 
                 # For API type servers, use call_api function directly
                 if server_type == "api":
@@ -112,18 +129,39 @@ class McpServers:
                         continue
 
                 # Use server instance to call the tool
-                try:
-                    call_result_raw = await server.call_tool(tool_name, parameter)
+                call_result_raw = None
+                action_result = ActionResult(
+                    tool_name=server_name,
+                    action_name=tool_name,
+                    content="",
+                    keep=True
+                )
+                max_retry = 3
+                for i in range(max_retry):
+                    try:
+                        call_result_raw = await server.call_tool(tool_name, parameter)
+                        break
+                    except Exception as e:
+                        logging.warning(f"Error calling tool error: {e}")
+                logging.info(f"tool_name:{server_name},action_name:{tool_name},call-mcp-tool-result: {call_result_raw}")
+                if not call_result_raw:
+                    logging.warning(f"Error calling tool with cached server: {e}")
 
-                    # Process the return result, consistent with the original logic
-                    action_result = ActionResult(
-                        content="",
-                        keep=True
-                    )
+                    self._update_metadata(result_key, {"error": str(e)}, operation_info)
 
+                    # If using cached server instance fails, try to clean up and recreate
+                    if server_name in self.server_instances:
+                        try:
+                            await cleanup_server(self.server_instances[server_name])
+                            del self.server_instances[server_name]
+                        except Exception as e:
+                            logging.warning(f"Failed to cleanup server {server_name}: {e}")
+                else:
                     if call_result_raw and call_result_raw.content:
                         if isinstance(call_result_raw.content[0], TextContent):
                             action_result = ActionResult(
+                                tool_name=server_name,
+                                action_name=tool_name,
                                 content=call_result_raw.content[0].text,
                                 keep=True,
                                 metadata=call_result_raw.content[0].model_extra.get(
@@ -132,25 +170,15 @@ class McpServers:
                             )
                         elif isinstance(call_result_raw.content[0], ImageContent):
                             action_result = ActionResult(
+                                tool_name=server_name,
+                                action_name=tool_name,
                                 content=f"data:image/jpeg;base64,{call_result_raw.content[0].data}",
                                 keep=True,
                                 metadata=call_result_raw.content[0].model_extra.get("metadata", {}),
                             )
                     results.append(action_result)
                     self._update_metadata(result_key, action_result, operation_info)
-                    
-                except Exception as e:
-                    logging.warning(f"Error calling tool with cached server: {e}")
 
-                    self._update_metadata(result_key, {"error": str(e)}, operation_info)
-                    
-                    # If using cached server instance fails, try to clean up and recreate
-                    if server_name in self.server_instances:
-                        try:
-                            await cleanup_server(self.server_instances[server_name])
-                            del self.server_instances[server_name]
-                        except Exception as e:
-                            logging.warning(f"Failed to cleanup server {server_name}: {e}")
         except Exception as e:
             logging.warning(f"Failed to call_tool: {e}")
             return None
@@ -203,3 +231,4 @@ class McpServers:
                 logging.info(f"Cleaned up server instance for {server_name}")
             except Exception as e:
                 logging.warning(f"Failed to cleanup server {server_name}: {e}")
+

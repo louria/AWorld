@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from enum import Enum
 
 from aworld.logs.util import logger
@@ -134,8 +134,8 @@ class ModelConfig(BaseConfig):
 
 class LlmCompressionConfig(BaseConfig):
     enabled: bool = False
+    compress_type: str = 'llm' # llm, llmlingua
     trigger_compress_token_length: int = 10000  # Trigger compression when exceeding this length
-    trigger_mapreduce_compress_token_length: int = 100000  # Maximum tokens for map reduce
     compress_model: ModelConfig = None
 
 class OptimizationConfig(BaseConfig):
@@ -164,6 +164,9 @@ class AgentConfig(BaseConfig):
     llm_client_type: ClientType = ClientType.SDK
     llm_sync_enabled: bool = True
     llm_async_enabled: bool = True
+    max_retries: int = 3
+    max_model_len: Optional[int] = None  # Maximum model context length
+    model_type: Optional[str] = 'qwen' # Model type determines tokenizer and maximum length
 
     # default reset init in first
     need_reset: bool = True
@@ -173,6 +176,7 @@ class AgentConfig(BaseConfig):
     max_input_tokens: int = 128000
     max_actions_per_step: int = 10
     system_prompt: Optional[str] = None
+    system_prompt_template: Optional[str] = None
     agent_prompt: Optional[str] = None
     working_dir: Optional[str] = None
     enable_recording: bool = False
@@ -183,6 +187,54 @@ class AgentConfig(BaseConfig):
 
     # context rule
     context_rule: ContextRuleConfig = ContextRuleConfig()
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        
+        # Apply all provided kwargs to the instance
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        
+        # Synchronize model configuration between AgentConfig and llm_config
+        self._sync_model_config()
+        
+        # Initialize max_model_len if not set
+        if not hasattr(self, 'max_model_len') or self.max_model_len is None:
+            # Default to qwen or other model_type
+            self.max_model_len = 128000
+            if hasattr(self, 'model_type') and self.model_type == 'claude':
+                self.max_model_len = 200000
+    
+    def _sync_model_config(self):
+        """Synchronize model configuration between AgentConfig and llm_config"""
+        # Ensure llm_config is initialized
+        if self.llm_config is None:
+            self.llm_config = ModelConfig()
+        
+        # Dynamically get all field names from ModelConfig
+        model_fields = list(ModelConfig.model_fields.keys())
+        
+        # Filter to only include fields that exist in current AgentConfig
+        agent_fields = set(self.model_fields.keys())
+        filtered_model_fields = [field for field in model_fields if field in agent_fields]
+        
+        # Check which configuration has llm_model_name set
+        agent_has_model_name = getattr(self, 'llm_model_name', None) is not None
+        llm_config_has_model_name = getattr(self.llm_config, 'llm_model_name', None) is not None
+        
+        if agent_has_model_name:
+            # If AgentConfig has llm_model_name, sync all fields from AgentConfig to llm_config
+            for field in filtered_model_fields:
+                agent_value = getattr(self, field, None)
+                if agent_value is not None:
+                    setattr(self.llm_config, field, agent_value)
+        elif llm_config_has_model_name:
+            # If llm_config has llm_model_name, sync all fields from llm_config to AgentConfig
+            for field in filtered_model_fields:
+                llm_config_value = getattr(self.llm_config, field, None)
+                if llm_config_value is not None:
+                    setattr(self, field, llm_config_value)
 
 class TaskConfig(BaseConfig):
     task_id: str = str(uuid.uuid4())
@@ -208,8 +260,10 @@ class ToolConfig(BaseConfig):
 
 
 class RunConfig(BaseConfig):
-    engine: str = 'local'
+    name: str = 'local'
     worker_num: int = 1
+    reuse_process: bool = True
+    cls: Optional[str] = None
     event_bus: Optional[Dict[str, Any]] = None
     tracer: Optional[Dict[str, Any]] = None
     replay_buffer: Optional[Dict[str, Any]] = None

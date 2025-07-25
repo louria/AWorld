@@ -11,14 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 class GaiaAgentServer:
+    def __init__(self):
+        pass
 
     def _get_model_config(self):
         try:
-            llm_provider = os.getenv("LLM_PROVIDER_GAIA")
-            llm_model_name = os.getenv("LLM_MODEL_NAME_GAIA")
-            llm_api_key = os.getenv("LLM_API_KEY_GAIA")
-            llm_base_url = os.getenv("LLM_BASE_URL_GAIA")
-            llm_temperature = os.getenv("LLM_TEMPERATURE_GAIA", 0.0)
+            llm_provider = os.getenv("LLM_PROVIDER", "openai")
+            llm_model_name = os.getenv("LLM_MODEL_NAME")
+            llm_api_key = os.getenv("LLM_API_KEY")
+            llm_base_url = os.getenv("LLM_BASE_URL")
+            llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
             return {
                 "provider": llm_provider,
                 "model": llm_model_name,
@@ -76,19 +78,12 @@ class GaiaAgentServer:
 
             from examples.gaia.gaia_agent_runner import GaiaAgentRunner
 
-            mcp_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "mcp.json"
-            )
-            with open(mcp_path, "r") as f:
-                mcp_config = json.load(f)
-
             runner = GaiaAgentRunner(
                 llm_provider=llm_provider,
                 llm_model_name=llm_model_name,
                 llm_base_url=llm_base_url,
                 llm_api_key=llm_api_key,
                 llm_temperature=llm_temperature,
-                mcp_config=mcp_config,
             )
 
             logger.info(f">>> Gaia Agent: prompt={prompt}, runner={runner}")

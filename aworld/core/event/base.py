@@ -4,7 +4,7 @@ import abc
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Generic, TypeVar, List, Optional
+from typing import Any, Dict, Generic, TypeVar, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -17,7 +17,26 @@ class Constants:
     AGENT = "agent"
     TOOL = "tool"
     TASK = "task"
+    PLAN = "plan"
     OUTPUT = "output"
+    TOOL_CALLBACK = "tool_callback"
+    AGENT_CALLBACK = "agent_callback"
+    GROUP = "group"
+
+
+class TopicType:
+    START = "__start"
+    FINISHED = "__finished"
+    OUTPUT = "__output"
+    ERROR = "__error"
+    RERUN = "__rerun"
+    HUMAN_CONFIRM = "__human_confirm"
+    CANCEL = "__cancel"
+    # for dynamic subscribe
+    SUBSCRIBE_TOOL = "__subscribe_tool"
+    SUBSCRIBE_AGENT = "__subscribe_agent"
+    GROUP_ACTIONS = "__group_actions"
+    GROUP_RESULTS = "__group_results"
 
 
 DataType = TypeVar('DataType')
@@ -34,27 +53,27 @@ class Message(Generic[DataType]):
     Specific message recognition and processing can be achieved through the type of `payload`
     or by extending `Message`.
     """
-    session_id: str
-    payload: Optional[DataType]
+    session_id: str = field(default_factory=str)
+    payload: Optional[DataType] = field(default_factory=object)
     # Current caller
-    sender: str
+    sender: str = field(default_factory=str)
     # event type
-    category: str
+    category: str = field(default_factory=str)
     # Next caller
-    receiver: str = None
+    receiver: str = field(default=None)
     # The previous caller
-    caller: str = None
-    id: str = uuid.uuid4().hex
-    priority: int = 0
+    caller: str = field(default=None)
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    priority: int = field(default=0)
     # Topic of message
-    topic: str = None
+    topic: str = field(default=None)
     headers: Dict[str, Any] = field(default_factory=dict)
-    timestamp: int = time.time()
+    timestamp: float = field(default_factory=lambda: time.time())
 
     def __post_init__(self):
         context = self.headers.get("context")
         if not context:
-            self.headers['context'] = Context.instance()
+            self.headers['context'] = Context()
 
     def __lt__(self, other: object) -> bool:
         if not isinstance(other, Message):
@@ -68,6 +87,13 @@ class Message(Generic[DataType]):
         else:
             return f'{category}_{self.sender if self.sender else ""}'
 
+    def is_error(self):
+        return self.topic == TopicType.ERROR
+
+    @property
+    def task_id(self):
+        return self.context.task_id
+
     @property
     def context(self) -> Context:
         return self.headers.get('context')
@@ -75,6 +101,14 @@ class Message(Generic[DataType]):
     @context.setter
     def context(self, context: Context):
         self.headers['context'] = context
+
+    @property
+    def group_id(self) -> str:
+        return self.headers.get('group_id')
+
+    @group_id.setter
+    def group_id(self, group_id: str):
+        self.headers['group_id'] = group_id
 
 
 @dataclass
@@ -99,6 +133,23 @@ class ToolMessage(Message[List[ActionModel]]):
     For example, `tool` event can interact with other tools through the MCP protocol.
     """
     category: str = 'tool'
+
+
+@dataclass
+class CancelMessage(Message[TaskItem]):
+    """Cancel event of the task, has higher priority."""
+    category: str = 'task'
+    priority: int = -1
+    topic: str = TopicType.CANCEL
+
+@dataclass
+class GroupMessage(Message[Union[Dict[str, Any], List[ActionModel]]]):
+    category: str = 'group'
+    group_id: str = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.headers['group_id'] = self.group_id
 
 
 class Messageable(object):

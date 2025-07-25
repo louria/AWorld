@@ -38,7 +38,7 @@ class ChunkResult:
 
 class CompressionType(Enum):
     LLM_BASED = "llm_based"
-    MAP_REDUCE = "map_reduce"  # New MapReduce compression type
+    LLMLINGUA = "llmlingua"
 
 @dataclass
 class CompressionResult:

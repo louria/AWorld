@@ -2,6 +2,7 @@
 # Copyright (c) 2025 inclusionAI.
 import asyncio
 import inspect
+import json
 import os
 import pkgutil
 import re
@@ -57,6 +58,11 @@ def override_in_subclass(name: str, sub_cls: object, base_cls: object) -> bool:
     this_method = getattr(sub_cls, name)
     base_method = getattr(base_cls, name)
     return this_method is not base_method
+
+
+def convert_to_subclass(obj, subclass):
+    obj.__class__ = subclass
+    return obj
 
 
 def _walk_to_root(path: str) -> Iterator[str]:
@@ -273,13 +279,22 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
+
 def replace_env_variables(config) -> Any:
+    """Replace environment variables in configuration.
+
+    Environment variables should be in the format ${ENV_VAR_NAME}.
+
+    Args:
+        config: Configuration to process (dict, list, or other value)
+
+    Returns:
+        Processed configuration with environment variables replaced
+    """
     if isinstance(config, dict):
         for key, value in config.items():
             if isinstance(value, str):
-                # 处理字符串中嵌入的环境变量
                 if "${" in value and "}" in value:
-                    # 寻找所有 ${ENV_VAR} 模式的子串
                     pattern = r'\${([^}]+)}'
                     matches = re.findall(pattern, value)
                     result = value
@@ -293,7 +308,6 @@ def replace_env_variables(config) -> Any:
     elif isinstance(config, list):
         for index, item in enumerate(config):
             if isinstance(item, str):
-                # 处理字符串中嵌入的环境变量
                 if "${" in item and "}" in item:
                     pattern = r'\${([^}]+)}'
                     matches = re.findall(pattern, item)
@@ -306,3 +320,45 @@ def replace_env_variables(config) -> Any:
             if isinstance(item, dict) or isinstance(item, list):
                 replace_env_variables(item)
     return config
+
+
+def get_local_hostname():
+    """
+    Get the local hostname.
+    First try `socket.gethostname()`, if it fails or returns an invalid value,
+    then try reverse DNS lookup using local IP.
+    """
+    try:
+        hostname = socket.gethostname()
+        # Simple validation - if hostname contains '.', consider it a valid FQDN (Fully Qualified Domain Name)
+        if hostname and '.' in hostname:
+            return hostname
+
+        # If hostname is not qualified, try reverse lookup via IP
+        local_ip = get_local_ip()
+        if local_ip:
+            try:
+                # Get hostname from IP
+                hostname, _, _ = socket.gethostbyaddr(local_ip)
+                return hostname
+            except (socket.herror, socket.gaierror):
+                # Reverse lookup failed, return original hostname or IP
+                pass
+
+        # If all methods fail, return original gethostname() result or IP
+        return hostname if hostname else local_ip
+
+    except Exception:
+        # Final fallback strategy
+        return "localhost"
+
+def load_mcp_config():
+    """Load MCP server configurations from config file."""
+    
+    path_cwd = os.getcwd()
+    mcp_path = os.path.join(path_cwd, "mcp.json")
+    try:
+        with open(mcp_path, "r") as f:
+            return json.load(f)
+    except Exception as err:
+        logger.error(f"Error loading MCP config[{mcp_path}] err is : {err}")

@@ -4,13 +4,13 @@ import abc
 import inspect
 import os
 import asyncio
+import traceback
 from concurrent.futures import Future
 from concurrent.futures.process import ProcessPoolExecutor
 from types import MethodType
 from typing import List, Callable, Any, Dict
 
-from aworld.config import RunConfig
-from aworld.core.task import TaskResponse
+from aworld.config import RunConfig, ConfigDict
 from aworld.logs.util import logger
 from aworld.utils.common import sync_exec
 
@@ -27,7 +27,7 @@ class RuntimeEngine(object):
 
     def __init__(self, conf: RunConfig):
         """Engine runtime instance initialize."""
-        self.conf = conf
+        self.conf = ConfigDict(conf.model_dump())
         self.runtime = None
         register(conf.name, self)
 
@@ -53,7 +53,7 @@ class RuntimeEngine(object):
         """Broadcast the data to all workers."""
 
     @abc.abstractmethod
-    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, TaskResponse]:
+    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, Any]:
         """Submission focuses on the execution of stateless tasks on the special engine cluster."""
         raise NotImplementedError("Base task execute not implemented!")
 
@@ -75,24 +75,34 @@ class LocalRuntime(RuntimeEngine):
     def _build_engine(self):
         self.runtime = self
 
-    def func_wrapper(self, func, *args, **kwargs):
+    def func_wrapper(self, func: Callable[..., Any], *args, **kwargs) -> Any:
         """Function is used to adapter computing form."""
-
-        if inspect.iscoroutinefunction(func):
-            res = sync_exec(func, *args, **kwargs)
-        else:
-            res = func(*args, **kwargs)
-        return res
-
-    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, TaskResponse]:
-        # opt of the one task process
-        if len(funcs) == 1:
-            func = funcs[0]
+        try:
             if inspect.iscoroutinefunction(func):
-                res = await func(*args, **kwargs)
+                res = sync_exec(func, *args, **kwargs)
             else:
                 res = func(*args, **kwargs)
-            return {res.id: res} if hasattr(res, "id") else {}
+            return res
+        except Exception as e:
+            logger.error(f"⚠️ Function {getattr(func, '__name__', 'unknown')} execution failed: {e}")
+            # Re-raise the exception to be handled by the executor
+            raise
+
+    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, Any]:
+        # opt of the one task process
+        if self.conf.get('reuse_process', True):
+            func = funcs[0]
+            try:
+                if inspect.iscoroutinefunction(func):
+                    res = await func(*args, **kwargs)
+                else:
+                    res = func(*args, **kwargs)
+                if not res:
+                    return {}
+                return {res.id: res}
+            except Exception as e:
+                logger.error(f"⚠️ Task execution failed: {e}, traceback: {traceback.format_exc()}")
+                raise
 
         num_executor = self.conf.get('worker_num', os.cpu_count() - 1)
         num_process = len(funcs)
@@ -110,6 +120,8 @@ class LocalRuntime(RuntimeEngine):
         results = {}
         for future in futures:
             future: Future = future
+            if future.exception():
+                logger.warning(f"exception: {future._exception}")
             res = future.result()
             results[res.id] = res
         return results
@@ -136,16 +148,17 @@ class SparkRuntime(RuntimeEngine):
         from pyspark.sql import SparkSession
 
         conf = self.conf
-        is_local = getattr(conf, 'is_local', False)
+        is_local = conf.get('is_local', True)
         logger.info('build runtime is_local:{}'.format(is_local))
         spark_builder = SparkSession.builder
         if is_local:
             if 'PYSPARK_PYTHON' not in os.environ:
-                raise Exception('`PYSPARK_PYTHON` need to set first in environment variables.')
+                import sys
+                os.environ['PYSPARK_PYTHON'] = sys.executable
 
             spark_builder = spark_builder.master('local[1]').config('spark.executor.instances', '1')
 
-        self.runtime = spark_builder.appName(conf.job_name).getOrCreate()
+        self.runtime = spark_builder.appName(conf.get('job_name', 'aworld_spark_job')).getOrCreate()
 
     def args_process(self, *args):
         re_args = []
@@ -156,7 +169,7 @@ class SparkRuntime(RuntimeEngine):
             re_args.append(arg)
         return re_args
 
-    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, TaskResponse]:
+    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, Any]:
         re_args = self.args_process(*args)
         res_rdd = self.runtime.sparkContext.parallelize(funcs, len(funcs)).map(
             lambda func: func(*re_args, **kwargs))
@@ -186,7 +199,7 @@ class RayRuntime(RuntimeEngine):
         self.num_executors = self.conf.get('num_executors', 1)
         logger.info("ray init finished, executor number {}".format(str(self.num_executors)))
 
-    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, TaskResponse]:
+    async def execute(self, funcs: List[Callable[..., Any]], *args, **kwargs) -> Dict[str, Any]:
         @self.runtime.remote
         def fn_wrapper(fn, *args):
             if asyncio.iscoroutinefunction(fn):
@@ -199,17 +212,17 @@ class RayRuntime(RuntimeEngine):
         for arg in args:
             params.append([arg] * len(funcs))
 
-        ray_map = lambda func, fn: [func.remote(x, *y) for x, *y in zip(fn, *params)]
+        def ray_map(func, fn): return [func.remote(x, *y) for x, *y in zip(fn, *params)]
         res_list = self.runtime.get(ray_map(fn_wrapper, funcs))
         return {res.id: res for res in res_list}
 
 
-RUNTIME = {}
+RUNTIME: Dict[str, RuntimeEngine] = {}
 
 
 def register(key, runtime_backend):
     if RUNTIME.get(key, None) is not None:
-        logger.warning("{} runtime backend already exists.".format(key))
+        logger.debug("{} runtime backend already exists, will reuse the client.".format(key))
         return
 
     RUNTIME[key] = runtime_backend

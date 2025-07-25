@@ -2,28 +2,16 @@
 # Copyright (c) 2025 inclusionAI.
 from typing import List, Dict
 
-from aworld.config import ConfigDict
+from aworld.config import RunConfig
+from aworld.core.agent.swarm import GraphBuildType
 from aworld.core.common import Config
-from aworld.core.runtime_engine import LOCAL
 
-from aworld.core.task import Task, Runner, TaskResponse
+from aworld.core.task import Task, TaskResponse, Runner
 from aworld.logs.util import logger
 from aworld.utils.common import new_instance, snake_to_camel
 
 
-class TaskType:
-    START = "__start"
-    FINISHED = "__finished"
-    OUTPUT = "__output"
-    ERROR = "__error"
-    RERUN = "__rerun"
-    HUMAN_CONFIRM = "__human_confirm"
-    # for dynamic subscribe
-    SUBSCRIBE_TOOL = "__subscribe_tool"
-    SUBSCRIBE_AGENT = "__subscribe_agent"
-
-
-async def choose_runners(tasks: List[Task]) -> List[Runner]:
+async def choose_runners(tasks: List[Task], agent_oriented: bool = True) -> List[Runner]:
     """Choose the correct runner to run the task.
 
     Args:
@@ -42,23 +30,24 @@ async def choose_runners(tasks: List[Task]) -> List[Runner]:
             # user runner class in the framework
             if task.swarm:
                 task.swarm.event_driven = task.event_driven
-                task.swarm.reset(task.input)
-                topology = task.swarm.topology_type
+                execute_type = task.swarm.build_type
             else:
-                topology = "sequence"
+                execute_type = GraphBuildType.WORKFLOW.value
 
             if task.event_driven:
-                runner = new_instance("aworld.runners.event_runner.TaskEventRunner", task)
+                runner = new_instance("aworld.runners.event_runner.TaskEventRunner",
+                                      task,
+                                      agent_oriented=agent_oriented)
             else:
                 runner = new_instance(
-                    f"aworld.runners.call_driven_runner.{snake_to_camel(topology)}Runner",
+                    f"aworld.runners.call_driven_runner.{snake_to_camel(execute_type)}Runner",
                     task
                 )
         runners.append(runner)
     return runners
 
 
-async def execute_runner(runners: List[Runner], run_conf: Config) -> Dict[str, TaskResponse]:
+async def execute_runner(runners: List[Runner], run_conf: RunConfig) -> Dict[str, TaskResponse]:
     """Execute runner in the runtime engine.
 
     Args:
@@ -66,10 +55,10 @@ async def execute_runner(runners: List[Runner], run_conf: Config) -> Dict[str, T
         run_conf: Runtime config, can choose the special computing engine to execute the runner.
     """
     if not run_conf:
-        run_conf = ConfigDict({"name": LOCAL})
+        run_conf = RunConfig()
 
     name = run_conf.name
-    if run_conf.get('cls'):
+    if run_conf.cls:
         runtime_backend = new_instance(run_conf.cls, run_conf)
     else:
         runtime_backend = new_instance(
@@ -122,3 +111,17 @@ def endless_detect(records: List[str], endless_threshold: int, root_agent_name: 
                     return True
 
     return False
+
+def _to_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_to_serializable(i) for i in obj]
+    elif hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    elif hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    elif hasattr(obj, "dict"):
+        return obj.dict()
+    else:
+        return obj

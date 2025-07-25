@@ -1,8 +1,10 @@
-#!/bin/bash
-cd "$(dirname "$0")"
+#!/bin/sh
+BASE_DIR=$(dirname "$(readlink -f "$0")")
 
-pip install -e . && \
+cd $BASE_DIR
 
-pip install -r mcp_servers/requirements.txt && \
+sh -c "cd aworld/cmd/web && npm install && npm run build"
 
-cd examples/cmd && aworld web
+python setup.py install
+
+cd examples/web && aworld web
